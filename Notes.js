@@ -42,13 +42,13 @@ const getDocument = (gridApi) => {
 };
 ==============================
 // VERTICAL CENTERING (NEW)
+ // ⭐ vertical center only for real rowSpan top rows
+const span = column.getRowSpan?.(node);
+if (span > 1) {
   const normalRowHeight = 40;
+  const mergedHeight = (group.end - group.start + 1) * normalRowHeight;
+  const extra = (mergedHeight - normalRowHeight) / 2;
 
-  if (isTop) {
-    const blockHeight = (group.end - group.start + 1) * normalRowHeight;
-    const extra = (blockHeight - normalRowHeight) / 2;
-    cell.margin = [0, extra, 0, extra];
-  } else {
-    cell.text = "";
-    cell.margin = [0, 0, 0, 0];
-  }
+  cell.margin = [0, extra, 0, extra];
+}
+
