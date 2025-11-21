@@ -1,5 +1,3 @@
-// ExportPdf_new.jsx
-
 import pdfMake from "pdfmake/build/pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts";
 
@@ -7,7 +5,6 @@ pdfMake.vfs = pdfFonts;
 
 /**
  * Detect dynamic row-span columns.
- * If any column returns rowSpan > 1 for any row → treat it as a row-span column.
  */
 const getRowSpanColumns = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -50,13 +47,14 @@ const getHeaderToExport = (gridApi) => {
       bold: true,
       fillColor: "#401664",
       color: "#ffffff",
-      margin: [0, 12, 0, 0]
+      margin: [0, 12, 0, 0],
+      alignment: "center"
     };
   });
 };
 
 /**
- * Build displayed rows + merged cell styling
+ * Build displayed rows + pinned bottom rows + merged-cell styling
  */
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -64,15 +62,13 @@ const getRowsToExport = (gridApi) => {
   const rowSpanCols = getRowSpanColumns(gridApi);
   const rowsToExport = [];
 
-  /** -------------------------------------
-   *  NORMAL DISPLAYED ROWS
-   * -------------------------------------
+  /**
+   * NORMAL DISPLAYED ROWS
    */
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
     const node = gridApi.getDisplayedRowAtIndex(rowIndex) ?? { data: {} };
     const rowData = node.data || {};
     const isTotalRow = rowData?.justification === "Total";
-
     const row = [];
 
     columns.forEach((column) => {
@@ -83,8 +79,12 @@ const getRowsToExport = (gridApi) => {
       try {
         if (typeof colDef.exportValueGetter === "function") {
           value =
-            colDef.exportValueGetter({ data: rowData, node, colDef, column }) ??
-            "";
+            colDef.exportValueGetter({
+              data: rowData,
+              node,
+              colDef,
+              column
+            }) ?? "";
         } else if (typeof gridApi.getValue === "function") {
           value = gridApi.getValue(column, node) ?? "";
         } else if (colDef.field) {
@@ -94,19 +94,19 @@ const getRowsToExport = (gridApi) => {
         value = "";
       }
 
-      const removeBorder = rowSpanCols.has(colId);
-
       const cell = {
         text: value,
         alignment: "center",
         noWrap: false,
-        margin: isTotalRow ? [0, 35, 0, 35] : [2, 4, 2, 4],
-        border: removeBorder ? [false, true, false, true] : true
+        margin: isTotalRow ? [0, 30, 0, 30] : [2, 6, 2, 6],
+        border: true
       };
 
-      if (removeBorder) {
+      // merged cell style
+      if (rowSpanCols.has(colId)) {
+        cell.border = [false, false, false, false];
+        cell.margin = [0, 30, 0, 30];
         cell.alignment = "center";
-        cell.margin = [0, 35, 0, 35];
       }
 
       row.push(cell);
@@ -115,9 +115,8 @@ const getRowsToExport = (gridApi) => {
     rowsToExport.push(row);
   }
 
-  /** -------------------------------------
-   *  ADDED — PINNED BOTTOM ROWS
-   * -------------------------------------
+  /**
+   * PINNED BOTTOM ROWS
    */
   const pinnedCount = gridApi.getPinnedBottomRowCount();
 
@@ -135,8 +134,12 @@ const getRowsToExport = (gridApi) => {
       try {
         if (typeof colDef.exportValueGetter === "function") {
           value =
-            colDef.exportValueGetter({ data: rowData, node, colDef, column }) ??
-            "";
+            colDef.exportValueGetter({
+              data: rowData,
+              node,
+              colDef,
+              column
+            }) ?? "";
         } else if (typeof gridApi.getValue === "function") {
           value = gridApi.getValue(column, node) ?? "";
         } else if (colDef.field) {
@@ -146,16 +149,20 @@ const getRowsToExport = (gridApi) => {
         value = "";
       }
 
-      const removeBorder = rowSpanCols.has(colId);
-
-      row.push({
+      const cell = {
         text: value,
         alignment: "center",
-        margin: [0, 8, 0, 8], // different style for pinned bottom rows
         bold: true,
         fillColor: "#f0f0f0",
-        border: removeBorder ? [false, true, false, true] : true
-      });
+        margin: [2, 8, 2, 8],
+        border: true
+      };
+
+      if (rowSpanCols.has(colId)) {
+        cell.border = [false, false, false, false];
+      }
+
+      row.push(cell);
     });
 
     rowsToExport.push(row);
@@ -164,7 +171,6 @@ const getRowsToExport = (gridApi) => {
   return rowsToExport;
 };
 
-
 /**
  * Final PDF document
  */
@@ -172,7 +178,6 @@ const getDocument = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const headerRow = getHeaderToExport(gridApi);
   const bodyRows = getRowsToExport(gridApi);
-  const rowSpanCols = getRowSpanColumns(gridApi);
 
   return {
     pageOrientation: "landscape",
@@ -209,37 +214,31 @@ const getDocument = (gridApi) => {
 
           heights: (rowIndex) => {
             if (rowIndex === 0) return 40; // header
-            const dataIndex = rowIndex - 1;
-            const node = gridApi.getDisplayedRowAtIndex(dataIndex);
+            const bodyIndex = rowIndex - 1;
+            const node = gridApi.getDisplayedRowAtIndex(bodyIndex);
             const rowData = node?.data || {};
-
             return rowData.justification === "Total" ? 80 : 40;
           },
 
           dontBreakRows: true
         },
 
+        /** FIXED BORDER / MERGE HANDLING */
         layout: {
           fillColor: (rowIndex) => {
             if (rowIndex === 0) return "#401664";
             return rowIndex % 2 === 0 ? "#fcfcfc" : "#fff";
           },
 
-          // Remove outer & inner vertical lines for row-span columns
-          vLineWidth: (i, node) => {
-            const colIndex = i - 1;
-            const col = columns[colIndex];
-
-            if (col && rowSpanCols.has(col.getColId())) {
-              return 0; // hide border for this col
-            }
-
-            return 1;
-          },
-
+          vLineWidth: () => 1,
           hLineWidth: () => 1,
           vLineColor: () => "#dde2eb",
-          hLineColor: () => "#dde2eb"
+          hLineColor: () => "#dde2eb",
+
+          paddingLeft: () => 4,
+          paddingRight: () => 4,
+          paddingTop: () => 6,
+          paddingBottom: () => 6
         }
       }
     ],
