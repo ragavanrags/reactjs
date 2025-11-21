@@ -182,4 +182,24 @@ else if (rowIndex > group.start && rowIndex <= group.end) {
   cell.stack = [];
   cell.margin = [0, 0, 0, 0];
 }
+===========
+// Middle-row (visual centering with slight upward shift)
+if (rowIndex === middleIndex) {
+  cell.text = "";       // remove direct text
+  cell.margin = [0, 0, 0, 0];
+
+  // Fine tuning for perfect visual alignment
+  const topPad = 6;      // increase to push text DOWN
+  const bottomPad = 2;   // increase to push text UP
+
+  cell.stack = [
+    { text: "", margin: [0, topPad, 0, 0] },    // top space
+    { text: value, alignment: "center" },       // actual text
+    { text: "", margin: [0, bottomPad, 0, 0] }  // bottom space
+  ];
+} else {
+  cell.text = "";
+  delete cell.stack;
+  cell.margin = [0, 0, 0, 0];
+}
 
