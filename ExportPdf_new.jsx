@@ -62,9 +62,9 @@ const getRowsToExport = (gridApi) => {
   const rowSpanCols = getRowSpanColumns(gridApi);
   const rowsToExport = [];
 
-  /**
+  /** -------------------------------------
    * NORMAL DISPLAYED ROWS
-   */
+   * ------------------------------------- */
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
     const node = gridApi.getDisplayedRowAtIndex(rowIndex) ?? { data: {} };
     const rowData = node.data || {};
@@ -78,12 +78,9 @@ const getRowsToExport = (gridApi) => {
       let value = "";
       try {
         if (typeof colDef.exportValueGetter === "function") {
-          value = colDef.exportValueGetter({
-            data: rowData,
-            node,
-            colDef,
-            column
-          }) ?? "";
+          value =
+            colDef.exportValueGetter({ data: rowData, node, colDef, column }) ??
+            "";
         } else if (typeof gridApi.getValue === "function") {
           value = gridApi.getValue(column, node) ?? "";
         } else if (colDef.field) {
@@ -93,17 +90,44 @@ const getRowsToExport = (gridApi) => {
         value = "";
       }
 
+      // default cell
       const cell = {
         text: value,
-        noWrap: false,
+        alignment: "center",
         margin: isTotalRow ? [0, 30, 0, 30] : [2, 6, 2, 6],
+        border: [true, true, true, true] // default full border
       };
 
-      // merged cell style
+      /** -------------------------------------
+       * ⭐ GENERIC ROWSPAN BORDER LOGIC
+       * Works for ANY column using rowSpan
+       * ------------------------------------- */
       if (rowSpanCols.has(colId)) {
-        // cell.border = [false, false, false, false];
+        const span = column.getRowSpan ? column.getRowSpan(node) : 1;
+
+        // TOP of merged block (span > 1)
+        if (span > 1) {
+          cell.border = [true, true, true, false]; // left, top, right, NO bottom
+        }
+
+        // MIDDLE rows of merged block (AG Grid returns span = 0)
+        if (span === 0) {
+          cell.border = [false, false, false, false]; // no internal borders
+        }
+
+        // BOTTOM of merged block (previous span > 1 and current span == 1)
+        const previousNode = gridApi.getDisplayedRowAtIndex(rowIndex - 1);
+        const previousSpan =
+          previousNode && column.getRowSpan
+            ? column.getRowSpan(previousNode)
+            : 1;
+
+        if (previousSpan > 1 && span === 1) {
+          cell.border = [true, false, true, true]; // left, NO top, right, bottom
+        }
+
+        // make merged group appear centered vertically
         cell.margin = [0, 30, 0, 30];
-        cell.alignment = "center";
       }
 
       row.push(cell);
@@ -112,30 +136,25 @@ const getRowsToExport = (gridApi) => {
     rowsToExport.push(row);
   }
 
-  /**
+  /** -------------------------------------
    * PINNED BOTTOM ROWS
-   */
+   * ------------------------------------- */
   const pinnedCount = gridApi.getPinnedBottomRowCount();
 
   for (let i = 0; i < pinnedCount; i++) {
     const node = gridApi.getPinnedBottomRow(i);
     const rowData = node?.data ?? {};
-
     const row = [];
 
     columns.forEach((column) => {
       const colDef = column.getColDef() || {};
-      const colId = column.getColId();
 
       let value = "";
       try {
         if (typeof colDef.exportValueGetter === "function") {
-          value = colDef.exportValueGetter({
-            data: rowData,
-            node,
-            colDef,
-            column
-          }) ?? "";
+          value =
+            colDef.exportValueGetter({ data: rowData, node, colDef, column }) ??
+            "";
         } else if (typeof gridApi.getValue === "function") {
           value = gridApi.getValue(column, node) ?? "";
         } else if (colDef.field) {
@@ -151,13 +170,10 @@ const getRowsToExport = (gridApi) => {
         bold: true,
         fillColor: "#f0f0f0",
         margin: [2, 8, 2, 8],
-        border: true
+        border: [true, true, true, true]
       };
 
-      if (rowSpanCols.has(colId)) {
-        cell.border = [false, false, false, false];
-      }
-
+      // pinned rows do NOT use rowSpan, so no special logic
       row.push(cell);
     });
 
