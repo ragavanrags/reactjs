@@ -1,64 +1,115 @@
+// ExportPdf_new.jsx
+
 import pdfMake from "pdfmake/build/pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts";
 
 pdfMake.vfs = pdfFonts;
 
 /**
- * Build PDF table header
+ * Detect dynamic row-span columns.
+ * If any column returns rowSpan > 1 for any row → treat it as a row-span column.
+ */
+const getRowSpanColumns = (gridApi) => {
+  const columns = gridApi.columnModel.getAllDisplayedColumns();
+  const rowSpanCols = new Set();
+  const rowCount = gridApi.getDisplayedRowCount();
+
+  for (let r = 0; r < rowCount; r++) {
+    const node = gridApi.getDisplayedRowAtIndex(r);
+
+    columns.forEach((col) => {
+      const supportsRowSpan = typeof col.getRowSpan === "function";
+      if (!supportsRowSpan) return;
+
+      const span = col.getRowSpan(node);
+      if (span && span > 1) {
+        rowSpanCols.add(col.getColId());
+      }
+    });
+  }
+
+  return rowSpanCols;
+};
+
+/**
+ * Build header
  */
 const getHeaderToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
 
   return columns.map((column) => {
     const { field } = column.getColDef();
-    const headerName = column.getColDef().headerName ?? field;
-    const headerNameUppercase =
-      headerName[0].toUpperCase() + headerName.slice(1);
+    const headerName = column.getColDef().headerName ?? field ?? "";
+    const title =
+      headerName.length > 0
+        ? headerName[0].toUpperCase() + headerName.slice(1)
+        : "";
 
     return {
-      text: headerNameUppercase,
+      text: title,
       bold: true,
-      margin: [0, 12, 0, 0],
       fillColor: "#401664",
-      color: "#ffffff"
+      color: "#ffffff",
+      margin: [0, 12, 0, 0]
     };
   });
 };
 
 /**
- * Build PDF table rows for displayed rows
+ * Build displayed rows + merged cell styling
  */
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
-  const rowsToExport = [];
   const rowCount = gridApi.getDisplayedRowCount();
+  const rowSpanCols = getRowSpanColumns(gridApi);
+  const rowsToExport = [];
 
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
-    const node = gridApi.getDisplayedRowAtIndex(rowIndex);
-    const rowData = node.data;
+    const node = gridApi.getDisplayedRowAtIndex(rowIndex) ?? { data: {} };
+    const rowData = node.data || {};
     const isTotalRow = rowData?.justification === "Total";
     const row = [];
 
     columns.forEach((column) => {
-      const colDef = column.getColDef();
-      const value = colDef.exportValueGetter
-        ? colDef.exportValueGetter({
-            data: node.data,
-            node,
-            colDef,
-            column
-          })
-        : gridApi.getValue(column, node) ?? "";
+      const colDef = column.getColDef() || {};
+      const colId = column.getColId();
 
-      const cellStyle = colDef.cellStyle || {};
-      row.push({
+      let value = "";
+      try {
+        if (typeof colDef.exportValueGetter === "function") {
+          value =
+            colDef.exportValueGetter({ data: rowData, node, colDef, column }) ??
+            "";
+        } else if (typeof gridApi.getValue === "function") {
+          value = gridApi.getValue(column, node) ?? "";
+        } else if (colDef.field) {
+          value = rowData[colDef.field] ?? "";
+        }
+      } catch {
+        value = "";
+      }
+
+      const removeBorder = rowSpanCols.has(colId); // row-span column → remove borders
+
+      const cell = {
         text: value,
-        ...cellStyle,
         alignment: "center",
-        margin: isTotalRow ? [2, 25, 2, 25] : [2, 4, 2, 4],
-        border: isTotalRow ? [false, true, false, true] : true,
-        noWrap: false
-      });
+        noWrap: false,
+
+        // tall row if Total row
+        margin: isTotalRow ? [0, 35, 0, 35] : [2, 4, 2, 4],
+
+        // normal borders except row-span columns
+        border: removeBorder ? [false, true, false, true] : true
+      };
+
+      // Perfect merged-center look for row-span cells
+      if (removeBorder) {
+        cell.alignment = "center";
+        cell.margin = [0, 35, 0, 35]; // simulate vertical middle
+      }
+
+      row.push(cell);
     });
 
     rowsToExport.push(row);
@@ -68,69 +119,23 @@ const getRowsToExport = (gridApi) => {
 };
 
 /**
- * Build PDF table rows for pinned bottom rows
+ * Final PDF document
  */
-const getPinnedBottomRowsToExport = (gridApi) => {
-  const columns = gridApi.columnModel.getAllDisplayedColumns();
-  const pinnedRows = [];
-  const pinnedCount = gridApi.getPinnedBottomRowCount ? gridApi.getPinnedBottomRowCount() : 0;
-
-  for (let i = 0; i < pinnedCount; i++) {
-    const node = gridApi.getPinnedBottomRow(i);
-    const rowData = node?.data || {};
-    const row = [];
-
-    columns.forEach((column) => {
-      const colDef = column.getColDef();
-      const value = colDef.exportValueGetter
-        ? colDef.exportValueGetter({
-            data: rowData,
-            node,
-            colDef,
-            column
-          })
-        : gridApi.getValue(column, node) ?? "";
-
-      const cellStyle = colDef.cellStyle || {};
-      row.push({
-        text: value,
-        ...cellStyle,
-        alignment: "center",
-        margin: [2, 4, 2, 4],
-        noWrap: false
-      });
-    });
-
-    pinnedRows.push(row);
-  }
-
-  return pinnedRows;
-};
-
-/**
- * Build full PDF document including displayed + pinned bottom rows
- */
-const getDocumentWithPinnedBottom = (gridApi) => {
+const getDocument = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const headerRow = getHeaderToExport(gridApi);
   const bodyRows = getRowsToExport(gridApi);
-  const pinnedRows = getPinnedBottomRowsToExport(gridApi);
-
-  // If there are pinned bottom rows, add a separator and then the pinned rows
-  // You can replace the separator with custom logic or styling if desired
-  const allRows = pinnedRows.length > 0
-    ? [...bodyRows, ...pinnedRows]
-    : bodyRows;
+  const rowSpanCols = getRowSpanColumns(gridApi);
 
   return {
     pageOrientation: "landscape",
     pageMargins: [10, 40, 10, 40],
 
     header: {
-      text: "Exported Data (Including Pinned Bottom Rows)",
+      text: "Exported Data",
       alignment: "right",
-      style: "header",
-      margin: [0, 10, 10, 0]
+      margin: [0, 10, 10, 0],
+      style: "header"
     },
 
     footer: (currentPage, pageCount) => ({
@@ -153,23 +158,17 @@ const getDocumentWithPinnedBottom = (gridApi) => {
         table: {
           headerRows: 1,
           widths: `${100 / columns.length}%`,
-          body: [headerRow, ...allRows],
+          body: [headerRow, ...bodyRows],
+
           heights: (rowIndex) => {
             if (rowIndex === 0) return 40; // header
-            // Check if rowIndex is in main rows or pinned
             const dataIndex = rowIndex - 1;
-            // Main grid rows
-            if (dataIndex >= 0 && dataIndex < bodyRows.length) {
-              const node = gridApi.getDisplayedRowAtIndex(dataIndex);
-              const rowData = node?.data || {};
-              return rowData?.justification === "Total" ? 80 : 40;
-            }
-            // Pinned bottom rows
-            if (dataIndex >= bodyRows.length) {
-              return 40;
-            }
-            return 40;
+            const node = gridApi.getDisplayedRowAtIndex(dataIndex);
+            const rowData = node?.data || {};
+
+            return rowData.justification === "Total" ? 80 : 40;
           },
+
           dontBreakRows: true
         },
 
@@ -178,27 +177,36 @@ const getDocumentWithPinnedBottom = (gridApi) => {
             if (rowIndex === 0) return "#401664";
             return rowIndex % 2 === 0 ? "#fcfcfc" : "#fff";
           },
+
+          // Remove outer & inner vertical lines for row-span columns
+          vLineWidth: (i, node) => {
+            const colIndex = i - 1;
+            const col = columns[colIndex];
+
+            if (col && rowSpanCols.has(col.getColId())) {
+              return 0; // hide border for this col
+            }
+
+            return 1;
+          },
+
           hLineWidth: () => 1,
-          vLineWidth: () => 1,
-          hLineColor: () => "#dde2eb",
-          vLineColor: () => "#dde2eb"
+          vLineColor: () => "#dde2eb",
+          hLineColor: () => "#dde2eb"
         }
       }
     ],
 
     styles: {
-      header: {
-        fontSize: 16,
-        bold: true
-      }
+      header: { fontSize: 16, bold: true }
     }
   };
 };
 
 /**
- * Export function: displayed rows + pinned bottom rows
+ * Export to PDF
  */
 export const exportFullGridWithPinnedBottomToPDF = (gridApi) => {
-  const doc = getDocumentWithPinnedBottom(gridApi);
+  const doc = getDocument(gridApi);
   pdfMake.createPdf(doc).download();
 };
