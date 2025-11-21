@@ -52,3 +52,29 @@ if (span > 1) {
   cell.margin = [0, extra, 0, extra];
 }
 
+
+heights: (rowIndex) => {
+  if (rowIndex === 0) return 40;
+
+  const bodyIndex = rowIndex - 1;
+  const node = gridApi.getDisplayedRowAtIndex(bodyIndex);
+
+  if (!node) return 40;
+
+  const rowData = node.data || {};
+
+  // total row
+  if (rowData.justification === "Total") return 80;
+
+  // ⭐️ ALLOW TOP ROW OF A ROWSPAN TO GROW
+  // if this row is a top-row of any rowspan group
+  for (const col of columns) {
+    const span = col.getRowSpan?.(node);
+    if (span > 1) {
+      return span * 40; // the merged total height
+    }
+  }
+
+  return 40; // normal
+},
+
