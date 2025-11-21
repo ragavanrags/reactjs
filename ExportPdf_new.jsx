@@ -103,32 +103,43 @@ const getRowsToExport = (gridApi) => {
        * Works for ANY column using rowSpan
        * ------------------------------------- */
       if (rowSpanCols.has(colId)) {
-        const span = column.getRowSpan ? column.getRowSpan(node) : 1;
-
-        // TOP of merged block (span > 1)
-        if (span > 1) {
-          cell.border = [true, true, true, false]; // left, top, right, NO bottom
-        }
-
-        // MIDDLE rows of merged block (AG Grid returns span = 0)
-        if (span === 0) {
-          cell.border = [false, false, false, false]; // no internal borders
-        }
-
-        // BOTTOM of merged block (previous span > 1 and current span == 1)
-        const previousNode = gridApi.getDisplayedRowAtIndex(rowIndex - 1);
-        const previousSpan =
-          previousNode && column.getRowSpan
-            ? column.getRowSpan(previousNode)
-            : 1;
-
-        if (previousSpan > 1 && span === 1) {
-          cell.border = [true, false, true, true]; // left, NO top, right, bottom
-        }
-
-        // make merged group appear centered vertically
-        cell.margin = [0, 30, 0, 30];
+          const span = column.getRowSpan ? column.getRowSpan(node) : 1;
+      
+          // TOP (span > 1)
+          if (span > 1) {
+            cell.border = [true, true, true, false];  // no bottom
+          }
+      
+          // MIDDLE (span == 0)
+          if (span === 0) {
+            cell.border = [false, false, false, false];
+          }
+      
+          // BOTTOM (span == 1 AND previous row was middle)
+          const previousNode = gridApi.getDisplayedRowAtIndex(rowIndex - 1);
+          const previousSpan =
+            previousNode && column.getRowSpan
+              ? column.getRowSpan(previousNode)
+              : 1;
+      
+          const isBottomOfSpan = span === 1 && previousSpan === 0;
+      
+          if (isBottomOfSpan) {
+            cell.border = [true, false, true, true];  // no top
+          }
+      
+          // NORMAL ROW (span ==1 AND previous row not middle)
+          const isNormalNonSpanRow = span === 1 && previousSpan !== 0;
+      
+          if (isNormalNonSpanRow) {
+            cell.border = [true, true, true, true];
+          }
+      
+          // center tall cell visual
+          cell.margin = [0, 30, 0, 30];
+          cell.alignment = "center";
       }
+
 
       row.push(cell);
     });
