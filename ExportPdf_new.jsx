@@ -59,129 +59,141 @@ const getHeaderToExport = (gridApi) => {
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const rowCount = gridApi.getDisplayedRowCount();
-
-  // 1) PRECOMPUTE ROWSPAN GROUPS FOR EACH COLUMN
-  const rowspanGroups = {};
-
-  columns.forEach((column) => {
-    const colId = column.getColId();
-    const groups = [];
-    let r = 0;
-
-    while (r < rowCount) {
-      const node = gridApi.getDisplayedRowAtIndex(r);
-      const span = column.getRowSpan ? column.getRowSpan(node) : 1;
-
-      if (span > 1) {
-        groups.push({ start: r, end: r + span - 1 });
-        r += span;
-      } else {
-        r++;
-      }
-    }
-
-    if (groups.length) rowspanGroups[colId] = groups;
-  });
-
+  const rowSpanCols = getRowSpanColumns(gridApi);
   const rowsToExport = [];
 
-  // 2) BUILD ROWS
+  // -----------------------------
+  // 1) Build preliminary rows with FULL rowSpan logic
+  // -----------------------------
+  const tempRows = [];
+
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
     const node = gridApi.getDisplayedRowAtIndex(rowIndex) ?? { data: {} };
     const rowData = node.data || {};
-    const isTotalRow = rowData?.justification === "Total";
+    const isTotal = rowData?.justification === "Total";
 
-    const row = [];
+    const rowCells = [];
 
     columns.forEach((column) => {
       const colDef = column.getColDef() || {};
       const colId = column.getColId();
 
-      let value = "";
+      let val = "";
       try {
         if (typeof colDef.exportValueGetter === "function") {
-          value =
+          val =
             colDef.exportValueGetter({ data: rowData, node, colDef, column }) ??
             "";
         } else if (typeof gridApi.getValue === "function") {
-          value = gridApi.getValue(column, node) ?? "";
+          val = gridApi.getValue(column, node) ?? "";
         } else if (colDef.field) {
-          value = rowData[colDef.field] ?? "";
+          val = rowData[colDef.field] ?? "";
         }
       } catch {
-        value = "";
+        val = "";
       }
 
       let cell = {
-        text: value,
+        text: val,
         alignment: "center",
-        margin: isTotalRow ? [0, 30, 0, 30] : [2, 6, 2, 6],
-        border: [true, true, true, true] // default
+        margin: isTotal ? [0, 30, 0, 30] : [2, 6, 2, 6],
+        border: [true, true, true, true],
       };
 
-      // 3) APPLY ROWSPAN LOGIC IF THIS COLUMN HAS GROUPS
-      const groups = rowspanGroups[colId];
-      if (groups) {
-        const group = groups.find(g => rowIndex >= g.start && rowIndex <= g.end);
+      // -----------------------------
+      // GENERIC rowSpan logic
+      // -----------------------------
+      if (rowSpanCols.has(colId)) {
+        const span = column.getRowSpan ? column.getRowSpan(node) : 1;
 
-        if (group) {
-          const isTop = rowIndex === group.start;
-          const isBottom = rowIndex === group.end;
-          const isMiddle = !isTop && !isBottom;
+        // mark group rows for later page-break logic
+        cell._isSpan = true;
 
-          if (isTop) {
-            cell.border = [true, true, true, false]; // no bottom
-          } else if (isMiddle) {
-            cell.border = [false, false, false, false]; // no borders inside
-          } else if (isBottom) {
-            cell.border = [true, false, true, true]; // no top
-          }
+        const prevNode = gridApi.getDisplayedRowAtIndex(rowIndex - 1);
+        const prevSpan =
+          prevNode && column.getRowSpan
+            ? column.getRowSpan(prevNode)
+            : 1;
 
-          // merged cell style
-          cell.margin = [0, 30, 0, 30];
+        // TOP
+        if (span > 1) {
+          cell.border = [true, true, true, false];
         }
+        // MIDDLE
+        else if (prevSpan > 1 && span === 1) {
+          cell.border = [true, false, true, false];
+          cell._isMiddle = true;
+        }
+        // CONTINUATION MIDDLE
+        else if (span === 0) {
+          cell.border = [true, false, true, false];
+          cell._isMiddle = true;
+        }
+        // BOTTOM
+        else if (prevSpan === 0 && span === 1) {
+          cell.border = [true, false, true, true];
+        }
+
+        // merged look
+        cell.margin = [0, 30, 0, 30];
       }
 
-      row.push(cell);
+      rowCells.push(cell);
     });
 
-    rowsToExport.push(row);
+    tempRows.push(rowCells);
   }
 
-  // 4) PINNED BOTTOM ROWS (unchanged)
-  const pinnedCount = gridApi.getPinnedBottomRowCount();
+  // -----------------------------
+  // 2) PRE-CALCULATE PAGE BREAKS
+  // -----------------------------
+  const pageHeight = 515;
+  let usedHeight = 40; // header occupies 40
+  const pageStartRows = new Set();
+  const pageEndRows = new Set();
 
-  for (let i = 0; i < pinnedCount; i++) {
-    const node = gridApi.getPinnedBottomRow(i);
-    const rowData = node?.data ?? {};
-    const row = [];
+  for (let i = 0; i < tempRows.length; i++) {
+    const node = gridApi.getDisplayedRowAtIndex(i);
+    const data = node?.data || {};
+    let height = data.justification === "Total" ? 80 : 40;
 
-    columns.forEach((column) => {
-      const colDef = column.getColDef() || {};
+    // check rowSpan top rows
+    columns.forEach((column, colIndex) => {
+      const colId = column.getColId();
+      if (tempRows[i][colIndex]._isSpan) {
+        const span = column.getRowSpan(node);
+        if (span > 1) height = span * 40; // rowSpan top row height
+      }
+    });
 
-      let value = "";
-      try {
-        if (typeof colDef.exportValueGetter === "function") {
-          value =
-            colDef.exportValueGetter({ data: rowData, node, colDef, column }) ??
-            "";
-        } else if (typeof gridApi.getValue === "function") {
-          value = gridApi.getValue(column, node) ?? "";
-        } else if (colDef.field) {
-          value = rowData[colDef.field] ?? "";
-        }
-      } catch {
-        value = "";
+    // check for overflow
+    if (usedHeight + height > pageHeight) {
+      pageStartRows.add(i);     // this row is first on new page
+      pageEndRows.add(i - 1);   // previous row is last on old page
+      usedHeight = height;      // reset for new page
+    } else {
+      usedHeight += height;
+    }
+  }
+
+  // -----------------------------
+  // 3) APPLY FINAL BORDER FIXES
+  // -----------------------------
+  for (let rowIndex = 0; rowIndex < tempRows.length; rowIndex++) {
+    const row = tempRows[rowIndex];
+
+    row.forEach((cell) => {
+      if (!cell._isMiddle) return;
+
+      // If this row is last middle row before page break → add bottom border
+      if (pageEndRows.has(rowIndex)) {
+        cell.border[3] = true;
       }
 
-      row.push({
-        text: value,
-        alignment: "center",
-        bold: true,
-        fillColor: "#f0f0f0",
-        margin: [2, 8, 2, 8],
-        border: [true, true, true, true]
-      });
+      // If this row is first middle row on new page → remove top border
+      if (pageStartRows.has(rowIndex)) {
+        cell.border[1] = false;
+      }
     });
 
     rowsToExport.push(row);
@@ -189,6 +201,7 @@ const getRowsToExport = (gridApi) => {
 
   return rowsToExport;
 };
+
 
 /**
  * Final PDF document
