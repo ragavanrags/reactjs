@@ -1,4 +1,3 @@
-
 import pdfMake from "pdfmake/build/pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts";
 
@@ -90,7 +89,7 @@ const getRowsToExport = (gridApi) => {
 
       const cell = {
         text: value,
-        alignment: "center",
+        // alignment: "center",
         margin: isTotalRow ? [0, 30, 0, 30] : [2, 6, 2, 6],
         border: [true, true, true, true] // default
       };
@@ -121,8 +120,8 @@ const getRowsToExport = (gridApi) => {
             const normalRowHeight = 40;
             const mergedHeight = (group.end - group.start + 1) * normalRowHeight;
             const extra = (mergedHeight - normalRowHeight) / 2;
-
             cell.margin = [0, extra, 0, extra];
+            cell.noWrap = false;
           }
         }
       }
@@ -224,7 +223,6 @@ const getDocument = (gridApi) => {
             const rowData = node?.data || {};
             return rowData.justification === "Total" ? 80 : 40;
           },
-
           dontBreakRows: true
         },
 
