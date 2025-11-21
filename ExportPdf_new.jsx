@@ -59,16 +59,38 @@ const getHeaderToExport = (gridApi) => {
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const rowCount = gridApi.getDisplayedRowCount();
-  const rowSpanCols = getRowSpanColumns(gridApi);
+
+  // 1) PRECOMPUTE ROWSPAN GROUPS FOR EACH COLUMN
+  const rowspanGroups = {};
+
+  columns.forEach((column) => {
+    const colId = column.getColId();
+    const groups = [];
+    let r = 0;
+
+    while (r < rowCount) {
+      const node = gridApi.getDisplayedRowAtIndex(r);
+      const span = column.getRowSpan ? column.getRowSpan(node) : 1;
+
+      if (span > 1) {
+        groups.push({ start: r, end: r + span - 1 });
+        r += span;
+      } else {
+        r++;
+      }
+    }
+
+    if (groups.length) rowspanGroups[colId] = groups;
+  });
+
   const rowsToExport = [];
 
-  /** -------------------------------------
-   * NORMAL DISPLAYED ROWS
-   * ------------------------------------- */
+  // 2) BUILD ROWS
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
     const node = gridApi.getDisplayedRowAtIndex(rowIndex) ?? { data: {} };
     const rowData = node.data || {};
     const isTotalRow = rowData?.justification === "Total";
+
     const row = [];
 
     columns.forEach((column) => {
@@ -90,57 +112,35 @@ const getRowsToExport = (gridApi) => {
         value = "";
       }
 
-      // default cell
-      const cell = {
+      let cell = {
         text: value,
         alignment: "center",
         margin: isTotalRow ? [0, 30, 0, 30] : [2, 6, 2, 6],
-        border: [true, true, true, true] // default full border
+        border: [true, true, true, true] // default
       };
 
-      /** -------------------------------------
-       * ⭐ GENERIC ROWSPAN BORDER LOGIC
-       * Works for ANY column using rowSpan
-       * ------------------------------------- */
-      if (rowSpanCols.has(colId)) {
-    const currentSpan = column.getRowSpan?.(node) ?? 1;
+      // 3) APPLY ROWSPAN LOGIC IF THIS COLUMN HAS GROUPS
+      const groups = rowspanGroups[colId];
+      if (groups) {
+        const group = groups.find(g => rowIndex >= g.start && rowIndex <= g.end);
 
-    const prevNode = gridApi.getDisplayedRowAtIndex(rowIndex - 1);
-    const nextNode = gridApi.getDisplayedRowAtIndex(rowIndex + 1);
+        if (group) {
+          const isTop = rowIndex === group.start;
+          const isBottom = rowIndex === group.end;
+          const isMiddle = !isTop && !isBottom;
 
-    const prevSpan = prevNode && column.getRowSpan ? column.getRowSpan(prevNode) ?? 1 : 1;
-    const nextSpan = nextNode && column.getRowSpan ? column.getRowSpan(nextNode) ?? 1 : 1;
+          if (isTop) {
+            cell.border = [true, true, true, false]; // no bottom
+          } else if (isMiddle) {
+            cell.border = [false, false, false, false]; // no borders inside
+          } else if (isBottom) {
+            cell.border = [true, false, true, true]; // no top
+          }
 
-    const isTop = currentSpan > 1;
-    const isMiddle = prevSpan > 1 && !isTop && nextSpan !== 1;
-    const isBottom = prevSpan > 1 && currentSpan === 1;
-
-    /** 🔹 TOP of merged block */
-    if (isTop) {
-        cell.border = [true, true, true, false]; // top, left, right
-    }
-
-    /** 🔹 MIDDLE of merged block (no borders) */
-    if (isMiddle) {
-        cell.border = [false, false, false, false];
-    }
-
-    /** 🔹 BOTTOM of merged block */
-    if (isBottom) {
-        cell.border = [true, false, true, true]; // bottom, left, right
-    }
-
-    /** 🔹 NORMAL row (span=1 and no merge group) */
-    if (!isTop && !isMiddle && !isBottom) {
-        cell.border = [true, true, true, true];
-    }
-
-    // merged visual look
-    cell.margin = [0, 30, 0, 30];
-    cell.alignment = "center";
-}
-
-
+          // merged cell style
+          cell.margin = [0, 30, 0, 30];
+        }
+      }
 
       row.push(cell);
     });
@@ -148,9 +148,7 @@ const getRowsToExport = (gridApi) => {
     rowsToExport.push(row);
   }
 
-  /** -------------------------------------
-   * PINNED BOTTOM ROWS
-   * ------------------------------------- */
+  // 4) PINNED BOTTOM ROWS (unchanged)
   const pinnedCount = gridApi.getPinnedBottomRowCount();
 
   for (let i = 0; i < pinnedCount; i++) {
@@ -176,17 +174,14 @@ const getRowsToExport = (gridApi) => {
         value = "";
       }
 
-      const cell = {
+      row.push({
         text: value,
         alignment: "center",
         bold: true,
         fillColor: "#f0f0f0",
         margin: [2, 8, 2, 8],
         border: [true, true, true, true]
-      };
-
-      // pinned rows do NOT use rowSpan, so no special logic
-      row.push(cell);
+      });
     });
 
     rowsToExport.push(row);
