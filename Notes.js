@@ -78,3 +78,27 @@ heights: (rowIndex) => {
   return 40; // normal
 },
 
+===========
+  heights: (rowIndex) => {
+  if (rowIndex === 0) return 40;
+
+  const bodyIndex = rowIndex - 1;
+  const node = gridApi.getDisplayedRowAtIndex(bodyIndex);
+  if (!node) return 40;
+
+  const rowData = node.data || {};
+
+  // total row
+  if (rowData.justification === "Total") return 80;
+
+  // ⭐ Detect top row of any rowSpan (ESLint-safe)
+  const topSpanColumn = columns.find(
+    (col) => col.getRowSpan?.(node) > 1
+  );
+
+  if (topSpanColumn) {
+    return topSpanColumn.getRowSpan(node) * 40;
+  }
+
+  return 40;
+},
