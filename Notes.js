@@ -153,3 +153,33 @@ if (rowIndex === middleIndex) {
   cell.margin = [0, 0, 0, 0];
   delete cell.stack;
 }
+
+=====
+  // ---------- PIXEL-BASED PERFECT CENTERING ----------
+if (rowIndex === group.start) {
+  // Only compute this once (top row)
+  const span = group.end - group.start + 1;
+  const normalHeight = 40;
+  const mergedHeight = span * normalHeight;
+
+  // compute pixel center inside merged block
+  const textHeight = 14;               // approximate font size height
+  const available = mergedHeight - textHeight;
+  const topSpace = available / 2;
+
+  // use stack to place text at center visually
+  cell.text = "";
+  cell.margin = [0, 0, 0, 0];
+  cell.stack = [
+    { text: "", margin: [0, topSpace - 20, 0, 0] },  // small correction
+    { text: value, alignment: "center" },
+  ];
+}
+
+// middle & bottom rows of group
+else if (rowIndex > group.start && rowIndex <= group.end) {
+  cell.text = "";
+  cell.stack = [];
+  cell.margin = [0, 0, 0, 0];
+}
+
