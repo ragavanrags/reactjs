@@ -115,6 +115,15 @@ const getRowsToExport = (gridApi) => {
 
           // merged cell style
           cell.margin = [0, 30, 0, 30];
+          // VERTICAL CENTERING (NEW)
+          const span = column.getRowSpan?.(node);
+          if (span > 1) {
+            const normalRowHeight = 40;
+            const mergedHeight = (group.end - group.start + 1) * normalRowHeight;
+            const extra = (mergedHeight - normalRowHeight) / 2;
+
+            cell.margin = [0, extra, 0, extra];
+          }
         }
       }
 
