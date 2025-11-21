@@ -4,7 +4,7 @@ import pdfFonts from "pdfmake/build/vfs_fonts";
 pdfMake.vfs = pdfFonts;
 
 /**
- * Build PDF table header
+ * Build PDF header
  */
 const getHeaderToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -12,11 +12,9 @@ const getHeaderToExport = (gridApi) => {
   return columns.map((column) => {
     const { field } = column.getColDef();
     const headerName = column.getColDef().headerName ?? field;
-    const headerNameUppercase =
-      headerName[0].toUpperCase() + headerName.slice(1);
 
     return {
-      text: headerNameUppercase,
+      text: headerName[0].toUpperCase() + headerName.slice(1),
       bold: true,
       margin: [0, 12, 0, 0],
       fillColor: "#401664",
@@ -26,30 +24,45 @@ const getHeaderToExport = (gridApi) => {
 };
 
 /**
- * Build PDF table rows
- * Replaces rowSpan with tall rows
+ * Build all body rows (normal + pinned bottom)
  */
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const rowsToExport = [];
-  const rowCount = gridApi.getDisplayedRowCount();
 
-  for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
-    const node = gridApi.getDisplayedRowAtIndex(rowIndex);
-    const rowData = node.data;
-    const isTotalRow = rowData?.justification === "Total"; // your logic
+  const normalRowCount = gridApi.getDisplayedRowCount();
+  const pinnedCount = gridApi.getPinnedBottomRowCount();
+
+  const getRowData = (rowIndex, pinned = false) => {
+    return pinned
+      ? gridApi.getPinnedBottomRow(rowIndex)
+      : gridApi.getDisplayedRowAtIndex(rowIndex);
+  };
+
+  const totalRows = normalRowCount + pinnedCount;
+
+  for (let i = 0; i < totalRows; i++) {
+    const isPinnedBottom = i >= normalRowCount;
+    const pinnedIndex = i - normalRowCount;
+
+    const node = getRowData(pinnedIndex, isPinnedBottom);
+    const rowData = node.data || {};
+    const isTotalRow = rowData.justification === "Total"; // your logic
+    const isPinnedTotal = isPinnedBottom; // treat pinned bottom row as special
+
     const row = [];
 
     columns.forEach((column) => {
       const colDef = column.getColDef();
-      const value = colDef.exportValueGetter
-        ? colDef.exportValueGetter({
-            data: node.data,
-            node,
-            colDef,
-            column
-          })
-        : gridApi.getValue(column, node) ?? "";
+      const value =
+        colDef.exportValueGetter
+          ? colDef.exportValueGetter({
+              data: node.data,
+              node,
+              colDef,
+              column
+            })
+          : gridApi.getValue(column, node) ?? "";
 
       const cellStyle = colDef.cellStyle || {};
 
@@ -57,8 +70,14 @@ const getRowsToExport = (gridApi) => {
         text: value,
         ...cellStyle,
 
-        // ⬇⬇ Instead of rowSpan → make row taller visually
-        margin: isTotalRow ? [2, 20, 2, 20] : [2, 4, 2, 4],
+        alignment: "center",
+
+        // Taller row for Total and pinned bottom
+        margin:
+          isTotalRow || isPinnedTotal ? [2, 20, 2, 20] : [2, 4, 2, 4],
+
+        // Remove vertical borders only for tall rows
+        border: isTotalRow || isPinnedTotal ? [false, true, false, true] : true,
 
         noWrap: false
       });
@@ -71,7 +90,7 @@ const getRowsToExport = (gridApi) => {
 };
 
 /**
- * Build full PDF document
+ * Build PDF doc
  */
 const getDocument = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -108,17 +127,30 @@ const getDocument = (gridApi) => {
       {
         table: {
           headerRows: 1,
-
-          // evenly spaced columns
           widths: `${100 / columns.length}%`,
-
           body: [headerRow, ...rows],
 
-          // PDF row height
           heights: (rowIndex) => {
             if (rowIndex === 0) return 40; // header
-            const rowData = gridApi.getDisplayedRowAtIndex(rowIndex - 1).data;
-            return rowData?.justification === "Total" ? 80 : 40;
+
+            const normalRowCount = gridApi.getDisplayedRowCount();
+            const pinnedCount = gridApi.getPinnedBottomRowCount();
+
+            const index = rowIndex - 1;
+
+            let node =
+              index < normalRowCount
+                ? gridApi.getDisplayedRowAtIndex(index)
+                : gridApi.getPinnedBottomRow(index - normalRowCount);
+
+            if (!node) return 40;
+
+            const rowData = node.data || {};
+
+            if (rowData.justification === "Total") return 80;
+            if (index >= normalRowCount) return 80; // pinned bottom
+
+            return 40;
           },
 
           dontBreakRows: true
@@ -146,7 +178,7 @@ const getDocument = (gridApi) => {
   };
 };
 
-// export function
+// export
 export const exportToPDF = (gridApi) => {
   const doc = getDocument(gridApi);
   pdfMake.createPdf(doc).download();
