@@ -41,30 +41,37 @@ const getDocument = (gridApi) => {
   };
 };
 ==============================
-  const getRowsToExport = (gridApi) => {
+ const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const rowsToExport = [];
 
   const rowCount = gridApi.getDisplayedRowCount();
   const skipMap = new Map(); // key: rowIndex, value: Set of colIds to skip
+  const maxRowSpanPerRow = new Map(); // key: rowIndex, value: max rowspan in that row
 
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
     const node = gridApi.getDisplayedRowAtIndex(rowIndex);
     const row = [];
 
+    let maxRowSpanInThisRow = 1;
+
     columns.forEach((column) => {
       const colId = column.getColId();
       const colDef = column.getColDef();
       const value = colDef.exportValueGetter
-        ? colDef.exportValueGetter({
-          data: node.data, node, colDef, column
-        }) : gridApi.getValue(column, node) ?? "";
+        ? colDef.exportValueGetter({ data: node.data, node, colDef, column })
+        : gridApi.getValue(column, node) ?? "";
       const cellStyle = colDef.cellStyle || {};
 
       const supportsRowSpan = typeof column.getRowSpan === "function";
       const rowSpan = supportsRowSpan ? column.getRowSpan(node) : 1;
 
-      // Skip if this cell is part of a previous rowSpan
+      // Track max rowspan in this row
+      if (rowSpan > maxRowSpanInThisRow) {
+        maxRowSpanInThisRow = rowSpan;
+      }
+
+      // Skip if this cell is part of a previous rowspan
       if (skipMap.has(rowIndex) && skipMap.get(rowIndex).has(colId)) {
         row.push(""); // placeholder for spanned cell
         return;
@@ -80,10 +87,11 @@ const getDocument = (gridApi) => {
 
         row.push({
           text: value,
-          ...(rowSpan > 1 ? { rowSpan, alignment: "center" } : {}),
+          rowSpan,
+          alignment: "center",
           ...cellStyle,
           margin: [0, 50, 0, 0],
-          noWrap: false
+          noWrap: false,
         });
       } else {
         // Regular cell
@@ -91,13 +99,20 @@ const getDocument = (gridApi) => {
           text: value,
           ...cellStyle,
           margin: [2, 2, 2, 2],
-          noWrap: false
+          noWrap: false,
         });
       }
     });
 
+    // Save max rowspan for this row
+    maxRowSpanPerRow.set(rowIndex, maxRowSpanInThisRow);
+
     rowsToExport.push(row);
   }
 
+  // Attach getRowSpanOfRow as a helper for external use
+  getRowsToExport.getRowSpanOfRow = (rowIndex) => maxRowSpanPerRow.get(rowIndex) || 1;
+
   return rowsToExport;
 };
+
