@@ -103,42 +103,43 @@ const getRowsToExport = (gridApi) => {
        * Works for ANY column using rowSpan
        * ------------------------------------- */
       if (rowSpanCols.has(colId)) {
-          const span = column.getRowSpan ? column.getRowSpan(node) : 1;
-      
-          // TOP (span > 1)
-          if (span > 1) {
-            cell.border = [true, true, true, false];  // no bottom
-          }
-      
-          // MIDDLE (span == 0)
-          if (span === 0) {
-            cell.border = [false, false, false, false];
-          }
-      
-          // BOTTOM (span == 1 AND previous row was middle)
-          const previousNode = gridApi.getDisplayedRowAtIndex(rowIndex - 1);
-          const previousSpan =
-            previousNode && column.getRowSpan
-              ? column.getRowSpan(previousNode)
-              : 1;
-      
-          const isBottomOfSpan = span === 1 && previousSpan === 0;
-      
-          if (isBottomOfSpan) {
-            cell.border = [true, false, true, true];  // no top
-          }
-      
-          // NORMAL ROW (span ==1 AND previous row not middle)
-          const isNormalNonSpanRow = span === 1 && previousSpan !== 0;
-      
-          if (isNormalNonSpanRow) {
-            cell.border = [true, true, true, true];
-          }
-      
-          // center tall cell visual
-          cell.margin = [0, 30, 0, 30];
-          cell.alignment = "center";
-      }
+    const currentSpan = column.getRowSpan?.(node) ?? 1;
+
+    const prevNode = gridApi.getDisplayedRowAtIndex(rowIndex - 1);
+    const nextNode = gridApi.getDisplayedRowAtIndex(rowIndex + 1);
+
+    const prevSpan = prevNode && column.getRowSpan ? column.getRowSpan(prevNode) ?? 1 : 1;
+    const nextSpan = nextNode && column.getRowSpan ? column.getRowSpan(nextNode) ?? 1 : 1;
+
+    const isTop = currentSpan > 1;
+    const isMiddle = prevSpan > 1 && !isTop && nextSpan !== 1;
+    const isBottom = prevSpan > 1 && currentSpan === 1;
+
+    /** 🔹 TOP of merged block */
+    if (isTop) {
+        cell.border = [true, true, true, false]; // top, left, right
+    }
+
+    /** 🔹 MIDDLE of merged block (no borders) */
+    if (isMiddle) {
+        cell.border = [false, false, false, false];
+    }
+
+    /** 🔹 BOTTOM of merged block */
+    if (isBottom) {
+        cell.border = [true, false, true, true]; // bottom, left, right
+    }
+
+    /** 🔹 NORMAL row (span=1 and no merge group) */
+    if (!isTop && !isMiddle && !isBottom) {
+        cell.border = [true, true, true, true];
+    }
+
+    // merged visual look
+    cell.margin = [0, 30, 0, 30];
+    cell.alignment = "center";
+}
+
 
 
       row.push(cell);
