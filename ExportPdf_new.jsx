@@ -3,13 +3,13 @@ import pdfFonts from "pdfmake/build/vfs_fonts";
 
 pdfMake.vfs = pdfFonts;
 
-const PAGE_HEIGHT = 770; // Approx A4 landscape usable page height in pdfMake units
+const PAGE_HEIGHT = 770; // Page height in pdfMake units (A4 landscape minus margins)
 const HEADER_ROW_HEIGHT = 40;
 const NORMAL_ROW_HEIGHT = 80;
 const PINNED_BOTTOM_ROW_HEIGHT = 40;
 
 /**
- * Builds header cells with style
+ * Builds header row for export with styling.
  */
 const getHeaderToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -30,34 +30,13 @@ const getHeaderToExport = (gridApi) => {
 };
 
 /**
- * Extract text from live rendered cell if possible, else fallback to raw value
- */
-const getCellTextFromRenderer = (gridApi, column, node) => {
-  const instances = gridApi.getCellRendererInstances({
-    rowNodes: [node],
-    columns: [column],
-  });
-
-  if (instances.length > 0) {
-    const rendererInstance = instances[0];
-    if (typeof rendererInstance.getExportValue === "function") {
-      return rendererInstance.getExportValue();
-    }
-    if (rendererInstance.gui) {
-      return rendererInstance.gui.innerText || "";
-    }
-  }
-  return gridApi.getValue(column, node) ?? "";
-};
-
-/**
- * Returns true if adding a row with given height will overflow the page
+ * Calculate if adding a row of given height exceeds the page height.
  */
 const willRowSplitPage = (currentHeight, rowHeight) => currentHeight + rowHeight > PAGE_HEIGHT;
 
 /**
- * Build all rows to export including pinned bottom rows,
- * inserting manual page breaks to prevent splitting of multi-row rowspans
+ * Builds rows array for export, including pinned bottom rows,
+ * inserting manual page breaks to keep rowspans intact.
  */
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -66,6 +45,10 @@ const getRowsToExport = (gridApi) => {
 
   let currentPageHeight = HEADER_ROW_HEIGHT;
 
+  /**
+   * Processes a single grid row node into export row format,
+   * uses exportValueGetter to get printable values.
+   */
   const processRow = (node, isPinnedBottom = false) => {
     if (!node) return;
     const row = [];
@@ -80,8 +63,13 @@ const getRowsToExport = (gridApi) => {
         continue;
       }
 
-      const cellText = getCellTextFromRenderer(gridApi, column, node);
       const colDef = column.getColDef();
+
+      // Use exportValueGetter if present to get display value for export
+      const cellText = colDef.exportValueGetter
+        ? colDef.exportValueGetter({ data: node.data, node, colDef, column })
+        : gridApi.getValue(column, node);
+
       const supportsRowSpan = typeof column.getRowSpan === "function";
       const rowSpan = supportsRowSpan ? column.getRowSpan(node) : 1;
 
@@ -105,7 +93,7 @@ const getRowsToExport = (gridApi) => {
       });
     }
 
-    // Calculate row height based on rowspan - for pinned bottom rows use fixed smaller height
+    // Calculate approximate row height
     const maxRowSpan = Math.max(...cellRowSpans);
     const rowHeight = isPinnedBottom ? PINNED_BOTTOM_ROW_HEIGHT : maxRowSpan * NORMAL_ROW_HEIGHT;
 
@@ -126,17 +114,14 @@ const getRowsToExport = (gridApi) => {
   // Process pinned bottom rows
   const pinnedCount = gridApi.getPinnedBottomRowCount ? gridApi.getPinnedBottomRowCount() : 0;
   for (let i = 0; i < pinnedCount; i++) {
-    const pinnedNode = gridApi.getPinnedBottomRow(i);
-    if (pinnedNode) {
-      processRow(pinnedNode, true);
-    }
+    processRow(gridApi.getPinnedBottomRow(i), true);
   }
 
   return rowsToExport;
 };
 
 /**
- * Compose whole PDF document definition
+ * Creates the pdfMake document definition with header, footer, and styled table
  */
 const getDocument = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -188,7 +173,7 @@ const getDocument = (gridApi) => {
 };
 
 /**
- * Export function available to call with gridApi
+ * Export trigger - call this with your ag-Grid gridApi
  */
 export const exportToPDF = (gridApi) => {
   const docDefinition = getDocument(gridApi);
