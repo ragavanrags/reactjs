@@ -131,3 +131,25 @@ heights: (rowIndex) => {
     cell.margin = [0, 0, 0, 0];
   }
 }
+===========
+// Middle-row nudge (replace your current middle-row block)
+if (rowIndex === middleIndex) {
+  // value is your original text variable
+  cell.text = "";               // remove direct text
+  cell.margin = [0, 0, 0, 0];   // no outer margin, avoid row expansion
+
+  // Stack with asymmetric spacers: small top spacer, larger bottom spacer -> pushes text upward
+  cell.stack = [
+    { text: "", margin: [0, 4, 0, 0] },     // small top spacer (tweak)
+    { text: value, alignment: "center" },   // actual text
+    { text: "", margin: [0, 12, 0, 0] }     // larger bottom spacer (tweak to control upward bias)
+  ];
+
+  // optional: adjust font/line height if you need fine control
+  // cell.stack[1].fontSize = 10;
+  // cell.stack[1].lineHeight = 1.1;
+} else {
+  cell.text = "";
+  cell.margin = [0, 0, 0, 0];
+  delete cell.stack;
+}
