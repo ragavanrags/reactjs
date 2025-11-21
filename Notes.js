@@ -102,3 +102,32 @@ heights: (rowIndex) => {
 
   return 40;
 },
+===========
+  if (group) {
+  const isTop = rowIndex === group.start;
+  const isBottom = rowIndex === group.end;
+  const isMiddle = !isTop && !isBottom;
+
+  const span = group.end - group.start + 1;
+  const middleIndex = group.start + Math.floor(span / 2);
+
+  // --- Borders (unchanged) ---
+  if (isTop) {
+    cell.border = [true, true, true, false];
+  } else if (isMiddle) {
+    cell.border = [true, false, true, false];
+  } else if (isBottom) {
+    cell.border = [true, false, true, true];
+  }
+
+  // --- Middle-row visual centering patch ---
+  if (rowIndex === middleIndex) {
+    // Only MIDDLE row gets text (centered visually)
+    cell.text = value;
+    cell.margin = [0, 10, 0, 10];  // optional small padding
+  } else {
+    // All other rows in group are blank
+    cell.text = "";
+    cell.margin = [0, 0, 0, 0];
+  }
+}
