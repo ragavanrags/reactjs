@@ -3,12 +3,13 @@ import pdfFonts from "pdfmake/build/vfs_fonts";
 
 pdfMake.vfs = pdfFonts;
 
-const PAGE_HEIGHT = 770; // approx page height in pdfMake units (A4 landscape minus margins)
+const PAGE_HEIGHT = 770; // Approx A4 landscape usable page height in pdfMake units
 const HEADER_ROW_HEIGHT = 40;
-const ROW_HEIGHT = 20;
+const NORMAL_ROW_HEIGHT = 80;
+const PINNED_BOTTOM_ROW_HEIGHT = 40;
 
 /**
- * Create header row for PDF export
+ * Builds header cells with style
  */
 const getHeaderToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -23,16 +24,15 @@ const getHeaderToExport = (gridApi) => {
       fillColor: "#401664",
       color: "#ffffff",
       alignment: "center",
+      noWrap: true,
     };
   });
 };
 
 /**
- * Retrieve cell text using live cell renderer instance if available,
- * otherwise fallback to raw gridApi.getValue()
+ * Extract text from live rendered cell if possible, else fallback to raw value
  */
 const getCellTextFromRenderer = (gridApi, column, node) => {
-  // Try to get live cell renderer instances for this cell (only for visible cells)
   const instances = gridApi.getCellRendererInstances({
     rowNodes: [node],
     columns: [column],
@@ -40,61 +40,51 @@ const getCellTextFromRenderer = (gridApi, column, node) => {
 
   if (instances.length > 0) {
     const rendererInstance = instances[0];
-    // Attempt to get exportable text from renderer instance
-    // This requires your cellRenderer component to implement a method like getExportValue()
     if (typeof rendererInstance.getExportValue === "function") {
       return rendererInstance.getExportValue();
     }
-    // Otherwise fallback to rendered inner text from DOM (if accessible)
     if (rendererInstance.gui) {
       return rendererInstance.gui.innerText || "";
     }
   }
-
-  // Fallback: get raw value from gridApi
   return gridApi.getValue(column, node) ?? "";
 };
 
 /**
- * Checks if adding a row with given rowspan will overflow the page height
+ * Returns true if adding a row with given height will overflow the page
  */
-const willRowSpanSplitPage = (currentHeight, rowSpan) => {
-  return currentHeight + rowSpan * ROW_HEIGHT > PAGE_HEIGHT;
-};
+const willRowSplitPage = (currentHeight, rowHeight) => currentHeight + rowHeight > PAGE_HEIGHT;
 
 /**
- * Build rows to export including pinned bottom rows,
- * using live renderer values when possible,
- * and avoid splitting rowspans by inserting page breaks
+ * Build all rows to export including pinned bottom rows,
+ * inserting manual page breaks to prevent splitting of multi-row rowspans
  */
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const rowsToExport = [];
-  const skipMap = new Map(); // to skip spanned cells in future rows
+  const skipMap = new Map();
+
   let currentPageHeight = HEADER_ROW_HEIGHT;
 
-  // Helper to process single row
-  const processRow = (node) => {
+  const processRow = (node, isPinnedBottom = false) => {
+    if (!node) return;
     const row = [];
-    const rowSpanHeights = [];
+    const cellRowSpans = [];
 
     for (const column of columns) {
       const colId = column.getColId();
 
       if (skipMap.has(node.rowIndex) && skipMap.get(node.rowIndex).has(colId)) {
         row.push("");
-        rowSpanHeights.push(ROW_HEIGHT);
+        cellRowSpans.push(0);
         continue;
       }
 
-      // Get cell value from live renderer if available
       const cellText = getCellTextFromRenderer(gridApi, column, node);
-
-      // Determine rowspan for this cell (if supported)
+      const colDef = column.getColDef();
       const supportsRowSpan = typeof column.getRowSpan === "function";
       const rowSpan = supportsRowSpan ? column.getRowSpan(node) : 1;
 
-      // Register future skip cells if rowSpan > 1
       if (rowSpan > 1) {
         for (let i = 1; i < rowSpan; i++) {
           const skipRow = node.rowIndex + i;
@@ -103,41 +93,42 @@ const getRowsToExport = (gridApi) => {
         }
       }
 
-      rowSpanHeights.push(rowSpan * ROW_HEIGHT);
+      cellRowSpans.push(rowSpan);
 
-      // Construct cell object for pdfMake
       row.push({
         text: cellText,
         rowSpan: rowSpan > 1 ? rowSpan : undefined,
         alignment: rowSpan > 1 ? "center" : "left",
-        margin: [2, 2, 2, 2],
+        margin: [2, 5, 2, 5],
         noWrap: false,
-        ...column.getColDef().cellStyle,
+        ...colDef.cellStyle,
       });
     }
 
-    // Check if row would overflow page and insert page break if needed
-    const maxRowHeight = Math.max(...rowSpanHeights);
-    if (willRowSpanSplitPage(currentPageHeight, maxRowHeight / ROW_HEIGHT)) {
+    // Calculate row height based on rowspan - for pinned bottom rows use fixed smaller height
+    const maxRowSpan = Math.max(...cellRowSpans);
+    const rowHeight = isPinnedBottom ? PINNED_BOTTOM_ROW_HEIGHT : maxRowSpan * NORMAL_ROW_HEIGHT;
+
+    if (willRowSplitPage(currentPageHeight, rowHeight)) {
       rowsToExport.push([{ text: "", pageBreak: "before", colSpan: columns.length }]);
       currentPageHeight = 0;
     }
 
     rowsToExport.push(row);
-    currentPageHeight += maxRowHeight;
+    currentPageHeight += rowHeight;
   };
 
-  // Process all displayed rows (filtered, sorted)
+  // Process body rows
   gridApi.forEachNodeAfterFilterAndSort((node) => {
     processRow(node);
   });
 
-  // Process pinned bottom rows if any
-  const pinnedRows = gridApi.getPinnedBottomRowCount ? gridApi.getPinnedBottomRowCount() : 0;
-  for (let i = 0; i < pinnedRows; i++) {
+  // Process pinned bottom rows
+  const pinnedCount = gridApi.getPinnedBottomRowCount ? gridApi.getPinnedBottomRowCount() : 0;
+  for (let i = 0; i < pinnedCount; i++) {
     const pinnedNode = gridApi.getPinnedBottomRow(i);
     if (pinnedNode) {
-      processRow(pinnedNode);
+      processRow(pinnedNode, true);
     }
   }
 
@@ -145,7 +136,7 @@ const getRowsToExport = (gridApi) => {
 };
 
 /**
- * Creates the full pdfMake document definition for export
+ * Compose whole PDF document definition
  */
 const getDocument = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -181,10 +172,7 @@ const getDocument = (gridApi) => {
           dontBreakRows: true,
         },
         layout: {
-          fillColor: (rowIndex) => {
-            if (rowIndex === 0) return "#401664"; // header color
-            return rowIndex % 2 === 0 ? "#fcfcfc" : "#fff"; // alternating rows
-          },
+          fillColor: (rowIndex) => (rowIndex === 0 ? "#401664" : rowIndex % 2 === 0 ? "#fcfcfc" : "#fff"),
           hLineWidth: () => 1,
           vLineWidth: () => 1,
           hLineColor: () => "#dde2eb",
@@ -194,16 +182,13 @@ const getDocument = (gridApi) => {
     ],
 
     styles: {
-      header: {
-        fontSize: 16,
-        bold: true,
-      },
+      header: { fontSize: 16, bold: true },
     },
   };
 };
 
 /**
- * Export function called externally
+ * Export function available to call with gridApi
  */
 export const exportToPDF = (gridApi) => {
   const docDefinition = getDocument(gridApi);
