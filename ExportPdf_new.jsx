@@ -94,6 +94,9 @@ const getRowsToExport = (gridApi) => {
         border: [true, true, true, true], // default
         noWrap: false
       };
+      
+     // Horizontal alignment for all cells can be controlled here
+      cell.alignment = column.getColDef().alignment || 'left';
 
       // 3) APPLY ROWSPAN LOGIC IF THIS COLUMN HAS GROUPS
       const groups = rowspanGroups[colId];
@@ -103,15 +106,56 @@ const getRowsToExport = (gridApi) => {
         if (group) {
           const isTop = rowIndex === group.start;
           const isBottom = rowIndex === group.end;
-          const isMiddle = !isTop && !isBottom;
+          const rowSpanCount = group.end - group.start + 1;
 
           if (isTop) {
-            cell.border = [true, true, true, false]; // no bottom
+            // FIX 1: VERTICAL CENTER ALIGNMENT
+            // Calculate a top margin to push the content to the vertical center.
+            // Base row height is 40. Content is pushed down by 6 (default paddingTop).
+            const baseRowHeight = 40;
+            const defaultPadding = 6;
+            const estimatedTextHeight = 16; 
+            const totalHeight = rowSpanCount * baseRowHeight;
+            
+            // Calculate margin to hit the center point, accounting for default padding
+            const verticalCenterMargin = Math.max(
+                (totalHeight / 2) - (estimatedTextHeight / 2) - defaultPadding,
+                defaultPadding
+            );
+
+            // Apply calculated margin for vertical centering and horizontal center alignment
+            cell.margin = [2, verticalCenterMargin, 2, 6];
             cell.alignment = "center";
-          } else if (isMiddle) {
-            cell.border = [true, false, true, false]; // no borders inside
-          } else if (isBottom) {
-            cell.border = [true, false, true, true]; // no top
+            cell.rowSpan = rowSpanCount;
+            
+            // 💡 FIX 2: BORDER CLEANUP
+            // The top cell should only have a bottom border if it's a single-row span (span=1).
+            // Since we only process span > 1 here, we remove the bottom border.
+            cell.border = [true, true, true, false]; // [Left, Top, Right, Bottom]
+            
+          } else { // This is a middle or bottom row of the span (row-span cell below top cell)
+            // For all subsequent rows in the span, the cell must be an empty object
+            // to be correctly skipped by pdfmake's table construction.
+            // Note: Use an empty string for `text` to maintain cell structure for border application.
+            cell.text = ""; 
+            
+            // Overwrite the cell to be an empty object as required by pdfmake rowSpan
+            // We use cell.text = "" only for logic, but pdfmake requires an empty object for a skipped cell.
+            // However, since you are applying borders *inside* the cell object, we need to keep it.
+            // We set the borders for middle/bottom rows:
+            if (isBottom) {
+              cell.border = [true, false, true, true]; // Only Left, Right, Bottom borders
+            } else { // Middle row
+              cell.border = [true, false, true, false]; // Only Left and Right borders
+            }
+            // For all rows except the top one, pdfmake requires an empty object {} in the row body array
+            // if the cell is part of a rowspan from a previous row. Your logic seems to be adding
+            // the 'cell' object to the 'row' array for all rows. 
+            // The standard pdfmake approach is to push an empty string/object for spanned cells:
+            row.push({}); // Pushes an empty object for spanned cells
+
+            // Continue to the next column as the cell for this column is handled.
+            continue; 
           }
         }
       }
