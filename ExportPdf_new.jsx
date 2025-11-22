@@ -4,6 +4,25 @@ import pdfFonts from "pdfmake/build/vfs_fonts";
 pdfMake.vfs = pdfFonts;
 
 /**
+ * Helper function to safely get pinned bottom nodes in any AG Grid Row Model (v25+)
+ */
+const getPinnedBottomNodes = (gridApi) => {
+  const rowModel = gridApi.getModel();
+  const pinnedNodes = [];
+  
+  if (rowModel && rowModel.getPinnedBottomRowCount) {
+      const count = rowModel.getPinnedBottomRowCount();
+      for (let i = 0; i < count; i++) {
+          const node = rowModel.getPinnedBottomRow(i);
+          if (node) {
+              pinnedNodes.push(node);
+          }
+      }
+  }
+  return pinnedNodes;
+};
+
+/**
  * Build header (No changes needed here)
  */
 const getHeaderToExport = (gridApi) => {
@@ -34,14 +53,11 @@ const getHeaderToExport = (gridApi) => {
 const processRowNodes = (nodes, columns, rowspanGroups, rowSpanColId) => {
     const rows = [];
     
-    // We need to keep a running index relative to the *start* of the main grid for accurate rowSpan mapping.
-    // However, since pinned rows are usually just summaries, we treat them as individual, non-spanned rows.
-    
     nodes.forEach((node) => {
         const row = [];
         const rowData = node.data || {};
         const isTotalRow = rowData.justification === "Total";
-        const rowIndex = node.rowIndex; // Use AG Grid's natural index for displayed rows
+        const rowIndex = node.rowIndex; 
 
         for (const column of columns) {
             const colId = column.getColId();
@@ -55,11 +71,12 @@ const processRowNodes = (nodes, columns, rowspanGroups, rowSpanColId) => {
                 noWrap: false
             };
 
-            // APPLY ROWSPAN LOGIC
+            // APPLY ROWSPAN LOGIC (ONLY for main body rows)
             const groups = rowspanGroups[colId];
             let isRowSpanHandled = false;
 
-            if (groups && rowSpanColId) { // Only check for rowSpan on the main grid body rows
+            // Check for rowSpan only on the main body (unpinned) rows
+            if (groups && rowSpanColId && node.rowPinned !== 'bottom') {
                 const group = groups.find((g) => rowIndex >= g.start && rowIndex <= g.end);
 
                 if (group) {
@@ -100,7 +117,7 @@ const processRowNodes = (nodes, columns, rowspanGroups, rowSpanColId) => {
                 continue; // Move to the next column
             }
             
-            // For all non-spanned cells (or the top cell of a span)
+            // For all non-spanned cells (or the top cell of a span, or pinned cells)
             row.push(cell);
         } // End of for...of column loop
 
@@ -117,14 +134,14 @@ const processRowNodes = (nodes, columns, rowspanGroups, rowSpanColId) => {
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   
-  // Get all displayed nodes (including filter/sort, excluding pinned)
+  // Get all displayed nodes (main body - handles filter/sort)
   const displayedNodes = [];
   gridApi.forEachNodeAfterFilterAndSort((node) => {
       displayedNodes.push(node);
   });
   
-  // Get Pinned Bottom Nodes (reinstated)
-  const pinnedBottomNodes = gridApi.getPinnedBottomRowNodes(); 
+  // 💡 FIX: Use the robust helper function to get pinned nodes
+  const pinnedBottomRowNodes = getPinnedBottomNodes(gridApi);
   
   const rowSpanColId = columns[0] ? columns[0].getColId() : null;
   const rowCount = displayedNodes.length; // Count only the main body rows for span calculation
@@ -132,7 +149,6 @@ const getRowsToExport = (gridApi) => {
   // 1) PRECOMPUTE ROWSPAN GROUPS FOR EACH COLUMN
   const rowspanGroups = {};
 
-  // We only calculate row spans for the main body rows. Pinned rows should not span.
   if (rowSpanColId) {
       const column = columns.find(c => c.getColId() === rowSpanColId);
       if (column) {
@@ -140,68 +156,84 @@ const getRowsToExport = (gridApi) => {
           let r = 0;
 
           while (r < rowCount) {
-              const node = displayedNodes[r]; // Iterate over the main body nodes
-              const span = column.getRowSpan ? column.getRowSpan(node) : 1;
-
-              if (span > 1) {
-                  groups.push({
-                      start: node.rowIndex, // Use the AG Grid rowIndex for mapping
-                      end: node.rowIndex + span - 1
-                  });
+              const node = displayedNodes[r]; 
+              if (node.rowPinned !== 'bottom') {
+                  const span = column.getRowSpan ? column.getRowSpan(node) : 1;
+    
+                  if (span > 1) {
+                      groups.push({
+                          start: node.rowIndex, 
+                          end: node.rowIndex + span - 1
+                      });
+                  }
+                  r += span;
+              } else {
+                  r++; 
               }
-              r += span;
           }
           rowspanGroups[rowSpanColId] = groups;
       }
   }
 
   // 2) PROCESS ROWS
-  // Process main body rows
   const bodyRows = processRowNodes(displayedNodes, columns, rowspanGroups, rowSpanColId);
-  
-  // Process pinned bottom rows (they will not have row spans applied)
-  const pinnedRows = processRowNodes(pinnedBottomNodes, columns, {}, null); 
+  const pinnedRows = processRowNodes(pinnedBottomRowNodes, columns, {}, null); 
   
   // 3) COMBINE
   return { 
       allRows: [...bodyRows, ...pinnedRows],
-      rowspanGroups: rowspanGroups, // Return groups for hLineWidth function
+      rowspanGroups: rowspanGroups, 
       rowSpanColId: rowSpanColId
   };
 };
 
 /**
- * Main export function
+ * Main export function (ExportPdf_new)
  */
 const exportToPdf = (gridApi, fileName) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const headerRow = getHeaderToExport(gridApi);
   
-  const { allRows, rowspanGroups, rowSpanColId } = getRowsToExport(gridApi); // Destructure the new return value
+  const { allRows, rowspanGroups, rowSpanColId } = getRowsToExport(gridApi); 
   
   const docDefinition = {
-    // ... (rest of docDefinition remains the same)
+    pageSize: "A4",
+    pageOrientation: "landscape",
+    pageMargins: [10, 10, 10, 30], // [left, top, right, bottom]
+    footer: (currentPage, pageCount) => ({
+      columns: [
+        {
+          text: "AG Grid - Confidential",
+          alignment: "left",
+          margin: [10, 0, 0, 10]
+        },
+        {
+          text: `Page ${currentPage} of ${pageCount}`,
+          alignment: "right",
+          margin: [0, 0, 10, 10]
+        }
+      ]
+    }),
 
     content: [
       {
         table: {
           headerRows: 1,
           widths: columns.map(() => `${100 / columns.length}%`),
-          body: [headerRow, ...allRows], // Use the combined array
+          body: [headerRow, ...allRows], 
 
           heights: (rowIndex) => {
             if (rowIndex === 0) return 40; // header
             
-            // Adjusted logic to find the node, handling both main and pinned rows
+            // Re-calculate nodes for height check
             const bodyIndex = rowIndex - 1;
-            
-            // Check main body rows first
             const displayedNodes = [];
             gridApi.forEachNodeAfterFilterAndSort((node) => {
                 displayedNodes.push(node);
             });
             
-            const pinnedBottomNodes = gridApi.getPinnedBottomRowNodes(); 
+            // 💡 FIX: Use the robust helper function here too
+            const pinnedBottomNodes = getPinnedBottomNodes(gridApi); 
             
             let node;
             if (bodyIndex < displayedNodes.length) {
@@ -211,6 +243,7 @@ const exportToPdf = (gridApi, fileName) => {
             }
             
             const rowData = node?.data || {};
+            // Return 80 height for Total rows, 40 for standard rows
             return rowData.justification === "Total" ? 80 : 40;
           },
           dontBreakRows: true 
@@ -218,7 +251,6 @@ const exportToPdf = (gridApi, fileName) => {
 
         /** FINAL FIX: CUSTOM LAYOUT FOR BORDER HANDLING */
         layout: {
-          // ... (fillColor remains the same)
           fillColor: (rowIndex) => {
             if (rowIndex === 0) return "#401664";
             return rowIndex % 2 === 0 ? "#fcfcfc" : "#fff"; 
@@ -234,23 +266,16 @@ const exportToPdf = (gridApi, fileName) => {
              // Check if this line index 'i' is the *end* of a row-span group
              const groups = rowspanGroups[rowSpanColId];
              if (groups) {
-                // The line index `i` corresponds to row index `i-1`.
-                // A line should be drawn if the row above it (i-1) is the end of a span.
-                // Or, if the line is the top of the row (i) and that row is the start of a span.
-                
-                // Check if the row *above* this line is the end of a span (i-1 is the row index)
+                // Check if the row *above* this line (i-1) is the end of a span (i is the line index)
                 const isEndOfSpan = groups.some(g => g.end + 1 === i);
 
-                // Check if the current row *i* is the start of a span
-                const isStartOfSpan = groups.some(g => g.start === i);
-                
-                // If we are at the end of a span, draw the line.
+                // If we are at the end of a span, draw the line. This helps with page-break border issue.
                 if (isEndOfSpan) {
                     return 1;
                 }
                 
                 // If we are inside a span, suppress the line
-                const isInsideSpan = groups.some(g => g.start < i && i < g.end + 1);
+                const isInsideSpan = groups.some(g => g.start + 1 <= i && i <= g.end);
                 if (isInsideSpan) {
                      return 0; // Inside a row-span group: no horizontal line
                 }
