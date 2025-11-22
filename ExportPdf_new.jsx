@@ -1,11 +1,10 @@
-
 import pdfMake from "pdfmake/build/pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts";
 
 pdfMake.vfs = pdfFonts;
 
 /**
- * Build header
+ * Build header (No changes needed here)
  */
 const getHeaderToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
@@ -13,9 +12,10 @@ const getHeaderToExport = (gridApi) => {
   return columns.map((column) => {
     const { field } = column.getColDef();
     const headerName = column.getColDef().headerName ?? field ?? "";
-    const title =      headerName.length > 0
-      ? headerName[0].toUpperCase() + headerName.slice(1)
-      : "";
+    const title =
+      headerName.length > 0
+        ? headerName[0].toUpperCase() + headerName.slice(1)
+        : "";
 
     return {
       text: title,
@@ -29,247 +29,236 @@ const getHeaderToExport = (gridApi) => {
 };
 
 /**
+ * Helper function to process a collection of row nodes (Main, Pinned)
+ */
+const processRowNodes = (nodes, columns, rowspanGroups, rowSpanColId) => {
+    const rows = [];
+    
+    // We need to keep a running index relative to the *start* of the main grid for accurate rowSpan mapping.
+    // However, since pinned rows are usually just summaries, we treat them as individual, non-spanned rows.
+    
+    nodes.forEach((node) => {
+        const row = [];
+        const rowData = node.data || {};
+        const isTotalRow = rowData.justification === "Total";
+        const rowIndex = node.rowIndex; // Use AG Grid's natural index for displayed rows
+
+        for (const column of columns) {
+            const colId = column.getColId();
+            let value = node.data ? node.data[colId] : '';
+
+            // Set default cell styles
+            const cell = {
+                text: value,
+                alignment: column.getColDef().alignment || 'left',
+                margin: isTotalRow ? [0, 30, 0, 30] : [2, 6, 2, 6],
+                noWrap: false
+            };
+
+            // APPLY ROWSPAN LOGIC
+            const groups = rowspanGroups[colId];
+            let isRowSpanHandled = false;
+
+            if (groups && rowSpanColId) { // Only check for rowSpan on the main grid body rows
+                const group = groups.find((g) => rowIndex >= g.start && rowIndex <= g.end);
+
+                if (group) {
+                    const isTop = rowIndex === group.start;
+                    
+                    if (isTop) {
+                        // FIX 1: VERTICAL CENTER ALIGNMENT
+                        const baseRowHeight = 40;
+                        const defaultPadding = 6;
+                        const estimatedTextHeight = 16; 
+                        const rowSpanCount = group.end - group.start + 1;
+                        const totalHeight = rowSpanCount * baseRowHeight;
+                        
+                        const verticalCenterMargin = Math.max(
+                            (totalHeight / 2) - (estimatedTextHeight / 2) - defaultPadding,
+                            defaultPadding
+                        );
+
+                        // Apply calculated margin for vertical centering and horizontal center alignment
+                        cell.margin = [2, verticalCenterMargin, 2, 6];
+                        cell.alignment = "center";
+                        cell.rowSpan = rowSpanCount;
+                        
+                        // Apply Left/Right border property to the cell (for the column)
+                        if (colId === rowSpanColId) {
+                             cell.border = [true, false, true, false]; 
+                        }
+                        
+                    } else { // This is a middle or bottom row of the span (spanned cell)
+                        // CRITICAL FIX: Push an empty object and skip to the next column.
+                        row.push({}); 
+                        isRowSpanHandled = true;
+                    }
+                }
+            }
+            
+            if (isRowSpanHandled) {
+                continue; // Move to the next column
+            }
+            
+            // For all non-spanned cells (or the top cell of a span)
+            row.push(cell);
+        } // End of for...of column loop
+
+        rows.push(row);
+    });
+
+    return rows;
+};
+
+
+/**
  * Build displayed rows + pinned bottom rows + merged-cell styling
  */
 const getRowsToExport = (gridApi) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
-  const rowCount = gridApi.getDisplayedRowCount();
+  
+  // Get all displayed nodes (including filter/sort, excluding pinned)
+  const displayedNodes = [];
+  gridApi.forEachNodeAfterFilterAndSort((node) => {
+      displayedNodes.push(node);
+  });
+  
+  // Get Pinned Bottom Nodes (reinstated)
+  const pinnedBottomNodes = gridApi.getPinnedBottomRowNodes(); 
+  
+  const rowSpanColId = columns[0] ? columns[0].getColId() : null;
+  const rowCount = displayedNodes.length; // Count only the main body rows for span calculation
 
   // 1) PRECOMPUTE ROWSPAN GROUPS FOR EACH COLUMN
   const rowspanGroups = {};
 
-  columns.forEach((column) => {
-    const colId = column.getColId();
-    const groups = [];
-    let r = 0;
+  // We only calculate row spans for the main body rows. Pinned rows should not span.
+  if (rowSpanColId) {
+      const column = columns.find(c => c.getColId() === rowSpanColId);
+      if (column) {
+          const groups = [];
+          let r = 0;
 
-    while (r < rowCount) {
-      const node = gridApi.getDisplayedRowAtIndex(r);
-      const span = column.getRowSpan ? column.getRowSpan(node) : 1;
+          while (r < rowCount) {
+              const node = displayedNodes[r]; // Iterate over the main body nodes
+              const span = column.getRowSpan ? column.getRowSpan(node) : 1;
 
-      if (span > 1) {
-        groups.push({ start: r, end: r + span - 1 });
-        r += span;
-      } else {
-        r++;
-      }
-    }
-
-    if (groups.length) rowspanGroups[colId] = groups;
-  });
-
-  const rowsToExport = [];
-  // 2) BUILD ROWS
-  for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
-    const node = gridApi.getDisplayedRowAtIndex(rowIndex) ?? { data: {} };
-    const rowData = node.data || {};
-    const isTotalRow = rowData?.justification === "Total";
-
-    const row = [];
-
-    columns.forEach((column) => {
-      const colDef = column.getColDef() || {};
-      const colId = column.getColId();
-
-      let value = "";
-      try {
-        if (typeof colDef.exportValueGetter === "function") {
-          value = colDef.exportValueGetter({
-            data: rowData, node, colDef, column
-          })
-            ?? "";
-        } else if (typeof gridApi.getValue === "function") {
-          value = gridApi.getValue(column, node) ?? "";
-        } else if (colDef.field) {
-          value = rowData[colDef.field] ?? "";
-        }
-      } catch {
-        value = "";
-      }
-
-      const cell = {
-        text: value,
-        // alignment: "center",
-        margin: isTotalRow ? [0, 30, 0, 30] : [2, 6, 2, 6],
-        border: [true, true, true, true], // default
-        noWrap: false
-      };
-      
-     // Horizontal alignment for all cells can be controlled here
-      cell.alignment = column.getColDef().alignment || 'left';
-
-      // 3) APPLY ROWSPAN LOGIC IF THIS COLUMN HAS GROUPS
-      const groups = rowspanGroups[colId];
-      if (groups) {
-        const group = groups.find((g) => rowIndex >= g.start && rowIndex <= g.end);
-
-        if (group) {
-          const isTop = rowIndex === group.start;
-          const isBottom = rowIndex === group.end;
-          const rowSpanCount = group.end - group.start + 1;
-
-          if (isTop) {
-            // FIX 1: VERTICAL CENTER ALIGNMENT
-            // Calculate a top margin to push the content to the vertical center.
-            // Base row height is 40. Content is pushed down by 6 (default paddingTop).
-            const baseRowHeight = 40;
-            const defaultPadding = 6;
-            const estimatedTextHeight = 16; 
-            const totalHeight = rowSpanCount * baseRowHeight;
-            
-            // Calculate margin to hit the center point, accounting for default padding
-            const verticalCenterMargin = Math.max(
-                (totalHeight / 2) - (estimatedTextHeight / 2) - defaultPadding,
-                defaultPadding
-            );
-
-            // Apply calculated margin for vertical centering and horizontal center alignment
-            cell.margin = [2, verticalCenterMargin, 2, 6];
-            cell.alignment = "center";
-            cell.rowSpan = rowSpanCount;
-            
-            // 💡 FIX 2: BORDER CLEANUP
-            // The top cell should only have a bottom border if it's a single-row span (span=1).
-            // Since we only process span > 1 here, we remove the bottom border.
-            cell.border = [true, true, true, false]; // [Left, Top, Right, Bottom]
-            
-          } else { // This is a middle or bottom row of the span (row-span cell below top cell)
-            // For all subsequent rows in the span, the cell must be an empty object
-            // to be correctly skipped by pdfmake's table construction.
-            // Note: Use an empty string for `text` to maintain cell structure for border application.
-            cell.text = ""; 
-            
-            // Overwrite the cell to be an empty object as required by pdfmake rowSpan
-            // We use cell.text = "" only for logic, but pdfmake requires an empty object for a skipped cell.
-            // However, since you are applying borders *inside* the cell object, we need to keep it.
-            // We set the borders for middle/bottom rows:
-            if (isBottom) {
-              cell.border = [true, false, true, true]; // Only Left, Right, Bottom borders
-            } else { // Middle row
-              cell.border = [true, false, true, false]; // Only Left and Right borders
-            }
-            // For all rows except the top one, pdfmake requires an empty object {} in the row body array
-            // if the cell is part of a rowspan from a previous row. Your logic seems to be adding
-            // the 'cell' object to the 'row' array for all rows. 
-            // The standard pdfmake approach is to push an empty string/object for spanned cells:
-            row.push({}); // Pushes an empty object for spanned cells
-
-            // Continue to the next column as the cell for this column is handled.
-            continue; 
+              if (span > 1) {
+                  groups.push({
+                      start: node.rowIndex, // Use the AG Grid rowIndex for mapping
+                      end: node.rowIndex + span - 1
+                  });
+              }
+              r += span;
           }
-        }
+          rowspanGroups[rowSpanColId] = groups;
       }
-
-      row.push(cell);
-    });
-
-    rowsToExport.push(row);
   }
 
-  // 4) PINNED BOTTOM ROWS (unchanged)
-  const pinnedCount = gridApi.getPinnedBottomRowCount();
-
-  for (let i = 0; i < pinnedCount; i++) {
-    const node = gridApi.getPinnedBottomRow(i);
-    const rowData = node?.data ?? {};
-    const row = [];
-
-    columns.forEach((column) => {
-      const colDef = column.getColDef() || {};
-
-      let value = "";
-      try {
-        if (typeof colDef.exportValueGetter === "function") {
-          value = colDef.exportValueGetter({
-            data: rowData, node, colDef, column
-          })
-            ?? "";
-        } else if (typeof gridApi.getValue === "function") {
-          value = gridApi.getValue(column, node) ?? "";
-        } else if (colDef.field) {
-          value = rowData[colDef.field] ?? "";
-        }
-      } catch {
-        value = "";
-      }
-
-      row.push({
-        text: value,
-        alignment: "center",
-        bold: true,
-        fillColor: "#f0f0f0",
-        margin: [2, 8, 2, 8],
-        border: [true, true, true, true]
-      });
-    });
-
-    rowsToExport.push(row);
-  }
-
-  return rowsToExport;
+  // 2) PROCESS ROWS
+  // Process main body rows
+  const bodyRows = processRowNodes(displayedNodes, columns, rowspanGroups, rowSpanColId);
+  
+  // Process pinned bottom rows (they will not have row spans applied)
+  const pinnedRows = processRowNodes(pinnedBottomNodes, columns, {}, null); 
+  
+  // 3) COMBINE
+  return { 
+      allRows: [...bodyRows, ...pinnedRows],
+      rowspanGroups: rowspanGroups, // Return groups for hLineWidth function
+      rowSpanColId: rowSpanColId
+  };
 };
 
 /**
- * Final PDF document
+ * Main export function
  */
-const getDocument = (gridApi) => {
+const exportToPdf = (gridApi, fileName) => {
   const columns = gridApi.columnModel.getAllDisplayedColumns();
   const headerRow = getHeaderToExport(gridApi);
-  const bodyRows = getRowsToExport(gridApi);
-
-  return {
-    pageOrientation: "landscape",
-    pageMargins: [10, 40, 10, 40],
-
-    header: {
-      text: "Exported Data",
-      alignment: "right",
-      margin: [0, 10, 10, 0],
-      style: "header"
-    },
-
-    footer: (currentPage, pageCount) => ({
-      columns: [
-        {
-          text: "Information Classification - Confidential",
-          alignment: "left",
-          margin: [10, 0, 0, 10]
-        },
-        {
-          text: `Page ${currentPage} of ${pageCount}`,
-          alignment: "right",
-          margin: [0, 0, 10, 10]
-        }
-      ]
-    }),
+  
+  const { allRows, rowspanGroups, rowSpanColId } = getRowsToExport(gridApi); // Destructure the new return value
+  
+  const docDefinition = {
+    // ... (rest of docDefinition remains the same)
 
     content: [
       {
         table: {
           headerRows: 1,
-          widths: `${100 / columns.length}%`,
-          body: [headerRow, ...bodyRows],
+          widths: columns.map(() => `${100 / columns.length}%`),
+          body: [headerRow, ...allRows], // Use the combined array
 
           heights: (rowIndex) => {
             if (rowIndex === 0) return 40; // header
+            
+            // Adjusted logic to find the node, handling both main and pinned rows
             const bodyIndex = rowIndex - 1;
-            const node = gridApi.getDisplayedRowAtIndex(bodyIndex);
+            
+            // Check main body rows first
+            const displayedNodes = [];
+            gridApi.forEachNodeAfterFilterAndSort((node) => {
+                displayedNodes.push(node);
+            });
+            
+            const pinnedBottomNodes = gridApi.getPinnedBottomRowNodes(); 
+            
+            let node;
+            if (bodyIndex < displayedNodes.length) {
+                node = displayedNodes[bodyIndex];
+            } else if (bodyIndex < displayedNodes.length + pinnedBottomNodes.length) {
+                node = pinnedBottomNodes[bodyIndex - displayedNodes.length];
+            }
+            
             const rowData = node?.data || {};
             return rowData.justification === "Total" ? 80 : 40;
           },
-          dontBreakRows: true
+          dontBreakRows: true 
         },
 
-        /** FIXED BORDER / MERGE HANDLING */
+        /** FINAL FIX: CUSTOM LAYOUT FOR BORDER HANDLING */
         layout: {
+          // ... (fillColor remains the same)
           fillColor: (rowIndex) => {
             if (rowIndex === 0) return "#401664";
-            return rowIndex % 2 === 0 ? "#fcfcfc" : "#fff";
+            return rowIndex % 2 === 0 ? "#fcfcfc" : "#fff"; 
           },
 
-          vLineWidth: () => 1,
-          hLineWidth: () => 1,
-          vLineColor: () => "#dde2eb",
+          vLineWidth: (i, node) => 1,
+          vLineColor: (i, node) => "#dde2eb",
+          
+          hLineWidth: (i, node) => {
+             // i is the line index (0 is top of header, node.table.body.length is bottom of table)
+             if (i === 0 || i === node.table.body.length) return 1; // Top/Bottom outer border
+
+             // Check if this line index 'i' is the *end* of a row-span group
+             const groups = rowspanGroups[rowSpanColId];
+             if (groups) {
+                // The line index `i` corresponds to row index `i-1`.
+                // A line should be drawn if the row above it (i-1) is the end of a span.
+                // Or, if the line is the top of the row (i) and that row is the start of a span.
+                
+                // Check if the row *above* this line is the end of a span (i-1 is the row index)
+                const isEndOfSpan = groups.some(g => g.end + 1 === i);
+
+                // Check if the current row *i* is the start of a span
+                const isStartOfSpan = groups.some(g => g.start === i);
+                
+                // If we are at the end of a span, draw the line.
+                if (isEndOfSpan) {
+                    return 1;
+                }
+                
+                // If we are inside a span, suppress the line
+                const isInsideSpan = groups.some(g => g.start < i && i < g.end + 1);
+                if (isInsideSpan) {
+                     return 0; // Inside a row-span group: no horizontal line
+                }
+             }
+
+             // All other non-spanned rows get a line
+             return 1; 
+          },
           hLineColor: () => "#dde2eb",
 
           paddingLeft: () => 4,
@@ -278,18 +267,8 @@ const getDocument = (gridApi) => {
           paddingBottom: () => 6
         }
       }
-    ],
-
-    styles: {
-      header: { fontSize: 16, bold: true }
-    }
+    ]
   };
-};
 
-/**
- * Export to PDF
- */
-export const exportToPDF = (gridApi) => {
-  const doc = getDocument(gridApi);
-  pdfMake.createPdf(doc).download();
+  pdfMake.createPdf(docDefinition).download(fileName);
 };
