@@ -1,3 +1,4 @@
+
 import pdfMake from "pdfmake/build/pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts";
 
@@ -58,7 +59,6 @@ const getRowsToExport = (gridApi) => {
   });
 
   const rowsToExport = [];
-
   // 2) BUILD ROWS
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
     const node = gridApi.getDisplayedRowAtIndex(rowIndex) ?? { data: {} };
@@ -91,7 +91,8 @@ const getRowsToExport = (gridApi) => {
         text: value,
         // alignment: "center",
         margin: isTotalRow ? [0, 30, 0, 30] : [2, 6, 2, 6],
-        border: [true, true, true, true] // default
+        border: [true, true, true, true], // default
+        noWrap: false
       };
 
       // 3) APPLY ROWSPAN LOGIC IF THIS COLUMN HAS GROUPS
@@ -106,22 +107,11 @@ const getRowsToExport = (gridApi) => {
 
           if (isTop) {
             cell.border = [true, true, true, false]; // no bottom
+            cell.alignment = "center";
           } else if (isMiddle) {
             cell.border = [true, false, true, false]; // no borders inside
           } else if (isBottom) {
             cell.border = [true, false, true, true]; // no top
-          }
-
-          // merged cell style
-          cell.margin = [0, 30, 0, 30];
-          // VERTICAL CENTERING (NEW)
-          const span = column.getRowSpan?.(node);
-          if (span > 1) {
-            const normalRowHeight = 40;
-            const mergedHeight = (group.end - group.start + 1) * normalRowHeight;
-            const extra = (mergedHeight - normalRowHeight) / 2;
-            cell.margin = [0, extra, 0, extra];
-            cell.noWrap = false;
           }
         }
       }
